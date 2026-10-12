@@ -79,9 +79,13 @@ jobs:
           tenant-id: ${{ vars.ARM_TENANT_ID }}
           subscription-id: ${{ vars.ARM_SUBSCRIPTION_ID }}
           audience: api://AzureADTokenExchange
+          # Work around intermittent Azure CLI subscription enumeration failures.
+          # The explicit subscription-id is selected and validated in the next step.
+          allow-no-subscriptions: true
 
       - name: Verify authenticated Azure subscription
         run: |
+          az account set --subscription "${{ vars.ARM_SUBSCRIPTION_ID }}"
           az account show \
             --query "{subscription:name, subscriptionId:id, tenantId:tenantId}" \
             --output table
