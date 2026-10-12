@@ -1,4 +1,4 @@
-name: Terraform Validate and Azure OIDC
+name: Terraform Validate and Azure OIDC Deployment
 
 on:
   pull_request:
@@ -13,10 +13,26 @@ on:
       - "modules/**/*.tf"
       - ".github/workflows/terraform-validate.yml"
   workflow_dispatch:
+    inputs:
+      action:
+        description: "Choose the Terraform operation"
+        required: true
+        type: choice
+        default: validate
+        options:
+          - validate
+          - plan
+          - apply
+          - destroy
+      confirm_destroy:
+        description: "For destroy only, type DESTROY exactly"
+        required: false
+        type: string
+        default: ""
 
 concurrency:
-  group: terraform-validate-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: terraform-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   validate:
@@ -46,9 +62,9 @@ jobs:
         run: terraform validate -no-color
 
   azure-oidc:
-    name: Authenticate to Azure using OIDC
+    name: Test Azure OIDC Authentication
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.action == 'validate')
     permissions:
       contents: read
       id-token: write
@@ -56,9 +72,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      # Keep allow-no-subscriptions false for the first diagnosis.
-      # If this step fails with "No subscriptions found", check the
-      # service principal's subscription assignment and RBAC in Azure.
       - name: Azure Login using OIDC
         uses: azure/login@v3
         with:
@@ -85,3 +98,217 @@ jobs:
             --name "$TARGET_RESOURCE_GROUP" \
             --query "{name:name, location:location, provisioningState:properties.provisioningState}" \
             --output table
+
+  destroy-confirmation:
+    name: Check destroy confirmation
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'destroy' && inputs.confirm_destroy != 'DESTROY'
+    steps:
+      - name: Require explicit confirmation
+        run: |
+          echo "Destroy was not run. Re-run manually and type DESTROY in the confirmation field."
+          exit 1
+
+  terraform-plan:
+    name: Terraform Plan (read-only)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'plan'
+    needs: validate
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_USE_AZUREAD: "true"
+      ARM_CLIENT_ID: ${{ vars.ARM_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.ARM_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.ARM_SUBSCRIPTION_ID }}
+      TF_VAR_subscription_id: ${{ vars.ARM_SUBSCRIPTION_ID }}
+      TF_VAR_resource_group_name: ${{ vars.TARGET_RESOURCE_GROUP }}
+      TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
+      TF_VAR_tls_certificate_pfx_base64: ${{ secrets.TLS_CERTIFICATE_PFX_BASE64 }}
+      TF_VAR_tls_certificate_password: ${{ secrets.TLS_CERTIFICATE_PASSWORD }}
+      TF_VAR_sql_admin_password: ${{ secrets.SQL_ADMIN_PASSWORD }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.8.5
+          terraform_wrapper: false
+
+      - name: Azure Login using OIDC
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.ARM_CLIENT_ID }}
+          tenant-id: ${{ vars.ARM_TENANT_ID }}
+          subscription-id: ${{ vars.ARM_SUBSCRIPTION_ID }}
+          audience: api://AzureADTokenExchange
+
+      - name: Configure remote state backend
+        working-directory: environments/prod
+        env:
+          STATE_RG: ${{ vars.TFSTATE_RESOURCE_GROUP }}
+          STATE_ACCOUNT: ${{ vars.TFSTATE_STORAGE_ACCOUNT }}
+          STATE_CONTAINER: ${{ vars.TFSTATE_CONTAINER }}
+        run: |
+          set -euo pipefail
+          test -n "$STATE_RG" || { echo "Missing TFSTATE_RESOURCE_GROUP"; exit 1; }
+          test -n "$STATE_ACCOUNT" || { echo "Missing TFSTATE_STORAGE_ACCOUNT"; exit 1; }
+          test -n "$STATE_CONTAINER" || { echo "Missing TFSTATE_CONTAINER"; exit 1; }
+          cat > backend.hcl <<EOF
+          resource_group_name  = "$STATE_RG"
+          storage_account_name = "$STATE_ACCOUNT"
+          container_name       = "$STATE_CONTAINER"
+          key                  = "secure-3tier/prod.tfstate"
+          use_oidc             = true
+          use_azuread_auth     = true
+          EOF
+
+      - name: Terraform init
+        working-directory: environments/prod
+        run: terraform init -input=false -backend-config=backend.hcl
+
+      - name: Terraform plan
+        working-directory: environments/prod
+        run: terraform plan -input=false -no-color
+
+  terraform-apply:
+    name: Terraform Apply (protected)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'apply'
+    needs: validate
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_USE_AZUREAD: "true"
+      ARM_CLIENT_ID: ${{ vars.ARM_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.ARM_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.ARM_SUBSCRIPTION_ID }}
+      TF_VAR_subscription_id: ${{ vars.ARM_SUBSCRIPTION_ID }}
+      TF_VAR_resource_group_name: ${{ vars.TARGET_RESOURCE_GROUP }}
+      TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
+      TF_VAR_tls_certificate_pfx_base64: ${{ secrets.TLS_CERTIFICATE_PFX_BASE64 }}
+      TF_VAR_tls_certificate_password: ${{ secrets.TLS_CERTIFICATE_PASSWORD }}
+      TF_VAR_sql_admin_password: ${{ secrets.SQL_ADMIN_PASSWORD }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.8.5
+          terraform_wrapper: false
+
+      - name: Azure Login using OIDC
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.ARM_CLIENT_ID }}
+          tenant-id: ${{ vars.ARM_TENANT_ID }}
+          subscription-id: ${{ vars.ARM_SUBSCRIPTION_ID }}
+          audience: api://AzureADTokenExchange
+
+      - name: Configure remote state backend
+        working-directory: environments/prod
+        env:
+          STATE_RG: ${{ vars.TFSTATE_RESOURCE_GROUP }}
+          STATE_ACCOUNT: ${{ vars.TFSTATE_STORAGE_ACCOUNT }}
+          STATE_CONTAINER: ${{ vars.TFSTATE_CONTAINER }}
+        run: |
+          set -euo pipefail
+          test -n "$STATE_RG" || { echo "Missing TFSTATE_RESOURCE_GROUP"; exit 1; }
+          test -n "$STATE_ACCOUNT" || { echo "Missing TFSTATE_STORAGE_ACCOUNT"; exit 1; }
+          test -n "$STATE_CONTAINER" || { echo "Missing TFSTATE_CONTAINER"; exit 1; }
+          cat > backend.hcl <<EOF
+          resource_group_name  = "$STATE_RG"
+          storage_account_name = "$STATE_ACCOUNT"
+          container_name       = "$STATE_CONTAINER"
+          key                  = "secure-3tier/prod.tfstate"
+          use_oidc             = true
+          use_azuread_auth     = true
+          EOF
+
+      - name: Terraform init
+        working-directory: environments/prod
+        run: terraform init -input=false -backend-config=backend.hcl
+
+      - name: Create and apply Terraform plan
+        working-directory: environments/prod
+        run: |
+          terraform plan -input=false -no-color -out=tfplan
+          terraform apply -input=false -auto-approve tfplan
+
+  terraform-destroy:
+    name: Terraform Destroy (protected and confirmed)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'destroy' && inputs.confirm_destroy == 'DESTROY'
+    needs: validate
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_USE_AZUREAD: "true"
+      ARM_CLIENT_ID: ${{ vars.ARM_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.ARM_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.ARM_SUBSCRIPTION_ID }}
+      TF_VAR_subscription_id: ${{ vars.ARM_SUBSCRIPTION_ID }}
+      TF_VAR_resource_group_name: ${{ vars.TARGET_RESOURCE_GROUP }}
+      TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
+      TF_VAR_tls_certificate_pfx_base64: ${{ secrets.TLS_CERTIFICATE_PFX_BASE64 }}
+      TF_VAR_tls_certificate_password: ${{ secrets.TLS_CERTIFICATE_PASSWORD }}
+      TF_VAR_sql_admin_password: ${{ secrets.SQL_ADMIN_PASSWORD }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.8.5
+          terraform_wrapper: false
+
+      - name: Azure Login using OIDC
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.ARM_CLIENT_ID }}
+          tenant-id: ${{ vars.ARM_TENANT_ID }}
+          subscription-id: ${{ vars.ARM_SUBSCRIPTION_ID }}
+          audience: api://AzureADTokenExchange
+
+      - name: Configure remote state backend
+        working-directory: environments/prod
+        env:
+          STATE_RG: ${{ vars.TFSTATE_RESOURCE_GROUP }}
+          STATE_ACCOUNT: ${{ vars.TFSTATE_STORAGE_ACCOUNT }}
+          STATE_CONTAINER: ${{ vars.TFSTATE_CONTAINER }}
+        run: |
+          set -euo pipefail
+          test -n "$STATE_RG" || { echo "Missing TFSTATE_RESOURCE_GROUP"; exit 1; }
+          test -n "$STATE_ACCOUNT" || { echo "Missing TFSTATE_STORAGE_ACCOUNT"; exit 1; }
+          test -n "$STATE_CONTAINER" || { echo "Missing TFSTATE_CONTAINER"; exit 1; }
+          cat > backend.hcl <<EOF
+          resource_group_name  = "$STATE_RG"
+          storage_account_name = "$STATE_ACCOUNT"
+          container_name       = "$STATE_CONTAINER"
+          key                  = "secure-3tier/prod.tfstate"
+          use_oidc             = true
+          use_azuread_auth     = true
+          EOF
+
+      - name: Terraform init
+        working-directory: environments/prod
+        run: terraform init -input=false -backend-config=backend.hcl
+
+      - name: Create and execute destroy plan
+        working-directory: environments/prod
+        run: |
+          terraform plan -destroy -input=false -no-color -out=destroy.tfplan
+          terraform apply -input=false -auto-approve destroy.tfplan
