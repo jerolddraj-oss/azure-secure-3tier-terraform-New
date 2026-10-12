@@ -20,9 +20,8 @@ resource "azurerm_monitor_diagnostic_setting" "firewall" {
     category = "AzureFirewallNetworkRule"
   }
 
-  metric {
+  enabled_metric {
     category = "AllMetrics"
-    enabled  = true
   }
 }
 
