@@ -1,4 +1,5 @@
-name: Terraform Validate
+```yaml
+name: Terraform Validate and Azure OIDC
 
 on:
   pull_request:
@@ -6,12 +7,15 @@ on:
       - "environments/**/*.tf"
       - "modules/**/*.tf"
       - ".github/workflows/terraform-validate.yml"
+
   push:
-    branches: [main]
+    branches:
+      - main
     paths:
       - "environments/**/*.tf"
       - "modules/**/*.tf"
       - ".github/workflows/terraform-validate.yml"
+
   workflow_dispatch:
 
 concurrency:
@@ -19,13 +23,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+
+  # =========================================================
+  # JOB 1: TERRAFORM VALIDATION
+  # No Azure authentication required for this job.
+  # =========================================================
   validate:
-    name: Format and validate
+    name: Terraform Format and Validate
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
+
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v7
 
       - name: Setup Terraform
@@ -34,51 +45,75 @@ jobs:
           terraform_version: 1.8.5
           terraform_wrapper: false
 
-      # Format the runner's checkout before validation so harmless formatting drift
-      # does not make the validation pipeline fail.
       - name: Format Terraform files
         run: terraform fmt -recursive
 
-      - name: Initialize production configuration without Azure backend
+      - name: Initialize Terraform without Azure backend
         working-directory: environments/prod
         run: terraform init -backend=false -input=false
 
-      - name: Validate production configuration
+      - name: Validate Terraform configuration
         working-directory: environments/prod
         run: terraform validate -no-color
 
-  azure-oidc-test:
-    name: Test Azure OIDC authentication
+
+  # =========================================================
+  # JOB 2: AZURE OIDC AUTHENTICATION
+  # AZURE AUTHENTICATION INFORMATION IS CONFIGURED BELOW.
+  # =========================================================
+  azure-oidc:
+    name: Authenticate to Azure using OIDC
     runs-on: ubuntu-latest
-    # Do not request Azure credentials for untrusted pull-request code.
-    # This job runs on pushes to main and manual workflow_dispatch runs.
+
+    # Do not authenticate to Azure for pull requests.
     if: github.event_name != 'pull_request'
+
+    # ========== AZURE OIDC CONFIGURATION: REQUIRED ==========
     permissions:
       contents: read
       id-token: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
+    # =======================================================
 
-      - name: Sign in to Azure using OIDC
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v@7
+
+      # =======================================================
+      # AZURE AUTHENTICATION INFORMATION
+      #
+      # Configure these GitHub repository variables:
+      # ARM_CLIENT_ID
+      # ARM_TENANT_ID
+      # ARM_SUBSCRIPTION_ID
+      #
+      # Do NOT enter your IDs directly into this YAML.
+      # =======================================================
+      - name: Azure Login using OIDC
         uses: azure/login@v2
         with:
           client-id: ${{ vars.ARM_CLIENT_ID }}
           tenant-id: ${{ vars.ARM_TENANT_ID }}
           subscription-id: ${{ vars.ARM_SUBSCRIPTION_ID }}
 
-      - name: Verify Azure subscription
+      - name: Display authenticated Azure subscription
         run: |
           az account show \
             --query "{subscription:name, subscriptionId:id, tenantId:tenantId}" \
             --output table
 
-      - name: Verify target resource group access
+      # =======================================================
+      # TARGET RESOURCE GROUP
+      #
+      # Configure this GitHub repository variable:
+      # TARGET_RESOURCE_GROUP
+      # Example: secure3tier-rg
+      # =======================================================
+      - name: Verify Azure resource group access
         env:
           TARGET_RESOURCE_GROUP: ${{ vars.TARGET_RESOURCE_GROUP }}
         run: |
           if [ -z "$TARGET_RESOURCE_GROUP" ]; then
-            echo "Missing GitHub Actions variable: TARGET_RESOURCE_GROUP"
+            echo "ERROR: TARGET_RESOURCE_GROUP variable is missing."
             exit 1
           fi
 
@@ -86,3 +121,4 @@ jobs:
             --name "$TARGET_RESOURCE_GROUP" \
             --query "{name:name, location:location, provisioningState:properties.provisioningState}" \
             --output table
+```
