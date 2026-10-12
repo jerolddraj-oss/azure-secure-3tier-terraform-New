@@ -48,7 +48,6 @@ jobs:
   azure-oidc:
     name: Authenticate to Azure using OIDC
     runs-on: ubuntu-latest
-    # OIDC is only requested on main pushes/manual runs, not PRs.
     if: github.event_name != 'pull_request'
     permissions:
       contents: read
@@ -57,8 +56,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      # Keep allow-no-subscriptions false for the first diagnosis.
+      # If this step fails with "No subscriptions found", check the
+      # service principal's subscription assignment and RBAC in Azure.
       - name: Azure Login using OIDC
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ vars.ARM_CLIENT_ID }}
           tenant-id: ${{ vars.ARM_TENANT_ID }}
@@ -79,7 +81,6 @@ jobs:
             echo "Missing GitHub Actions variable TARGET_RESOURCE_GROUP"
             exit 1
           fi
-
           az group show \
             --name "$TARGET_RESOURCE_GROUP" \
             --query "{name:name, location:location, provisioningState:properties.provisioningState}" \
