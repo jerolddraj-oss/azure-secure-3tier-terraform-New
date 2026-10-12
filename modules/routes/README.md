@@ -1,3 +1,3 @@
 # Route tables module
 
-The environment root references this module to steer spoke traffic through Azure Firewall. Implement and validate route tables and subnet associations, including symmetric return paths, before deploying. This folder currently documents the intent only.
+Creates spoke route tables that direct internet and selected inter-spoke paths through Azure Firewall. Validate symmetric routing and return paths in a non-production environment before deployment.
