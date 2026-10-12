@@ -1,8 +1,10 @@
-subscription_id = "00000000-0000-0000-0000-000000000000"
-location        = "East US"
-name_prefix     = "secure3tier"
+subscription_id     = "00000000-0000-0000-0000-000000000000"
+resource_group_name = "secure3tier-rg"
+location            = "East US"
+name_prefix         = "secure3tier"
 
-# Sensitive values must be set locally/through a secret manager before a real plan:
+# Set these sensitive values outside this file, e.g. with TF_VAR_* environment variables
+# or a dedicated deployment environment's secret manager:
 # TF_VAR_ssh_public_key
 # TF_VAR_tls_certificate_pfx_base64
 # TF_VAR_tls_certificate_password
