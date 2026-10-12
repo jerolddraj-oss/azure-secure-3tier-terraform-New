@@ -73,17 +73,14 @@ variable "admin_username" {
 variable "ssh_public_key" {
   type      = string
   sensitive = true
-  default   = ""
 }
 variable "tls_certificate_pfx_base64" {
   type      = string
   sensitive = true
-  default   = ""
 }
 variable "tls_certificate_password" {
   type      = string
   sensitive = true
-  default   = ""
 }
 variable "sql_admin_username" {
   type    = string
@@ -92,5 +89,4 @@ variable "sql_admin_username" {
 variable "sql_admin_password" {
   type      = string
   sensitive = true
-  default   = "PlaceholderOnly-ChangeMe123!"
 }
