@@ -1,3 +1,3 @@
 # Application Gateway WAF
 
-The environment root references this module for WAF_v2 and an HTTPS listener. Implement the gateway, TLS certificate handling and backend health probes using secure certificate storage before deploying. This folder currently documents the intent only.
+Creates a WAF_v2 gateway with an HTTPS listener and the Web VM as its backend. Supply a real PFX certificate and password through secret management; verify health probes and certificate lifecycle before deployment.
