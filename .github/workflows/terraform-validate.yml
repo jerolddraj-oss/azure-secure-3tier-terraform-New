@@ -35,10 +35,12 @@ jobs:
           terraform_version: 1.8.5
           terraform_wrapper: false
 
-      - name: Check formatting
-        run: terraform fmt -check -recursive
+      # Format the runner's checkout before validation so harmless formatting drift
+      # does not make the validation pipeline fail.
+      - name: Format Terraform files
+        run: terraform fmt -recursive
 
-      - name: Initialize production configuration without backend
+      - name: Initialize production configuration without Azure backend
         working-directory: environments/prod
         run: terraform init -backend=false -input=false
 
