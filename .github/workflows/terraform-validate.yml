@@ -1,0 +1,47 @@
+name: Terraform Validate
+
+on:
+  pull_request:
+    paths:
+      - "environments/**/*.tf"
+      - "modules/**/*.tf"
+      - ".github/workflows/terraform-validate.yml"
+  push:
+    branches: [main]
+    paths:
+      - "environments/**/*.tf"
+      - "modules/**/*.tf"
+      - ".github/workflows/terraform-validate.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-validate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Format and validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.5
+          terraform_wrapper: false
+
+      - name: Check formatting
+        run: terraform fmt -check -recursive
+
+      - name: Initialize production configuration without backend
+        working-directory: environments/prod
+        run: terraform init -backend=false -input=false
+
+      - name: Validate production configuration
+        working-directory: environments/prod
+        run: terraform validate -no-color
