@@ -1,53 +1,68 @@
 # Configure GitHub Actions authentication to Azure
 
-## Recommended: OIDC (no client secret)
+Use **OIDC / workload identity federation** for the preferred setup. It authenticates GitHub Actions without storing a long-lived client secret. The current validation-only workflow does not need Azure authentication; follow this guide when setting up a plan/deploy workflow.
 
-### 1. Collect Azure IDs
+## Recommended: OIDC
 
-In Azure Portal, open **Microsoft Entra ID → Overview** and copy the **Tenant ID**. Open **Subscriptions**, select the target subscription and copy the **Subscription ID**.
+### 1. Get Azure identifiers
 
-### 2. Create or choose an app registration
+In the Azure Portal:
+1. Open **Microsoft Entra ID → Overview** and copy **Tenant ID**.
+2. Open **Subscriptions**, select your target subscription, and copy **Subscription ID**.
 
-Open **Microsoft Entra ID → App registrations → New registration**. Name it `github-azure-terraform`, select the appropriate supported account type (normally single tenant for an organization-owned workload), and create it. Copy the **Application (client) ID**. The app registration's service principal is the identity used for Azure RBAC.
+### 2. Create an app registration (service principal identity)
 
-### 3. Add the federated credential
+1. Open **Microsoft Entra ID → App registrations → New registration**.
+2. Name it `github-azure-terraform`; choose single-tenant unless your identity architecture requires otherwise.
+3. Create it and copy **Application (client) ID**.
+4. The corresponding Enterprise Application/service principal is the identity to which Azure RBAC is assigned.
 
-Open the app registration → **Certificates & secrets → Federated credentials → Add credential**. Choose **GitHub Actions deploying Azure resources** where available.
+### 3. Add a federated credential
 
-Set:
-- Organization/user: `jerolddraj-oss`
-- Repository: `azure-secure-3tier-terraform-New`
-- Entity type: **Branch**
-- Branch: `main`
-- Name: `github-main-oidc`
+1. Open the app registration → **Certificates & secrets → Federated credentials → Add credential**.
+2. Choose **GitHub Actions deploying Azure resources**.
+3. Set:
+   - Organization/user: `jerolddraj-oss`
+   - Repository: `azure-secure-3tier-terraform-New`
+   - Entity type: **Branch**
+   - Branch: `main`
+   - Credential name: `github-main-oidc`
+4. Save. GitHub's issuer, subject and audience must exactly match the workflow token. For a branch-based credential the subject is normally:
+   `repo:jerolddraj-oss/azure-secure-3tier-terraform-New:ref:refs/heads/main`
+   and the audience is `api://AzureADTokenExchange`.
+5. If you later configure GitHub Environment protection and make the deploy job target that environment, create a separate federated credential matching the environment subject shown in Entra ID.
 
-Save it. The issuer, subject and audience must match the workflow token; for the above branch the subject is normally `repo:jerolddraj-oss/azure-secure-3tier-terraform-New:ref:refs/heads/main` and audience is `api://AzureADTokenExchange`. If deploying from a protected environment, use the environment subject format instead and configure the same environment name in GitHub.
+### 4. Pre-create the deployment resource group and register providers
 
-### 4. Assign Azure permissions
+The Terraform root is intentionally configured to use an **existing** resource group so that permissions can be scoped to that group:
+- In Azure Portal, create resource group `secure3tier-rg` in the same region you intend to use (default: `East US`).
+- Ensure `resource_group_name` in `environments/prod/terraform.tfvars` matches it.
+- Have a subscription administrator register these resource providers once: `Microsoft.Network`, `Microsoft.Compute`, `Microsoft.Sql`, `Microsoft.Insights`, and `Microsoft.OperationalInsights`. The Terraform provider is configured with `resource_provider_registrations = "none"` so the CI identity does not need subscription-level provider-registration rights.
 
-Open the subscription or, preferably, the dedicated target resource group → **Access control (IAM) → Add role assignment**. Assign a role that permits the Terraform resources you manage.
+### 5. Assign least-privilege Azure permissions
 
-For a lab, **Contributor** at a dedicated test resource group is a common starting point; it cannot grant Microsoft Entra role assignments. Avoid giving Owner at subscription scope just to make a pipeline work. If the pipeline needs role assignments, handle that separately with a narrowly scoped administrator-approved permission. For remote state, grant the identity appropriate blob data-plane access (for example **Storage Blob Data Contributor** scoped to the state container/account) and configure the storage backend for Entra/OIDC auth.
+In the resource group **secure3tier-rg**: open **Access control (IAM) → Add role assignment** and assign **Contributor** to the app's service principal. This is a practical lab starting role for managing resources in that group; production environments should narrow permissions further based on reviewed resource operations. Contributor does not let the identity grant itself additional Azure RBAC roles.
 
-### 5. Add GitHub repository variables
+If using the Azure Storage remote backend, assign **Storage Blob Data Contributor** on the Terraform state container (or state storage account, if container scope is not practical). The state storage account/container must exist before `terraform init`. The backend identity needs data-plane access even when infrastructure permissions are correct.
 
-In GitHub, open **Settings → Secrets and variables → Actions → Variables** and add:
-- `ARM_CLIENT_ID` = app registration Application (client) ID
-- `ARM_TENANT_ID` = Microsoft Entra Tenant ID
-- `ARM_SUBSCRIPTION_ID` = Azure Subscription ID
+### 6. Add GitHub repository variables
 
-These are identifiers, not secrets. Do not add a client secret when using OIDC.
+Open the repository → **Settings → Secrets and variables → Actions → Variables** and add:
 
-### 6. Use OIDC in a deployment workflow
+- `ARM_CLIENT_ID` = Entra app's Application (client) ID
+- `ARM_TENANT_ID` = Tenant ID
+- `ARM_SUBSCRIPTION_ID` = Subscription ID
 
-The job that logs into Azure must declare `permissions: id-token: write` and `contents: read`. Use `azure/login@v2` with `client-id`, `tenant-id` and `subscription-id` from the three variables. For Terraform AzureRM provider authentication, export the corresponding `ARM_*` environment variables or configure the provider to use OIDC. Only add Azure login to a deployment job; format/validate CI does not need cloud credentials.
+These are identifiers, not secrets. Do not create a client secret for OIDC.
 
-Recommended pattern:
+### 7. Use OIDC in a deployment job
+
+The validation workflow intentionally doesn't log in to Azure. For a separate plan/deployment job, use `id-token: write` and the above repository variables:
 
 ```yaml
 permissions:
-  id-token: write
   contents: read
+  id-token: write
 
 steps:
   - uses: actions/checkout@v4
@@ -60,6 +75,7 @@ steps:
     working-directory: environments/prod
     env:
       ARM_USE_OIDC: "true"
+      ARM_USE_AZUREAD: "true"
       ARM_CLIENT_ID: ${{ vars.ARM_CLIENT_ID }}
       ARM_TENANT_ID: ${{ vars.ARM_TENANT_ID }}
       ARM_SUBSCRIPTION_ID: ${{ vars.ARM_SUBSCRIPTION_ID }}
@@ -68,30 +84,32 @@ steps:
       terraform plan -out=tfplan
 ```
 
-Use a configured remote backend and keep `backend.hcl` uncommitted. Do not run `apply` automatically from an untrusted pull request. Require environment approval or protected-branch review before production apply.
+Copy `environments/prod/backend.hcl.example` to a local `backend.hcl`, set the storage account/container/resource group fields, and keep the real file untracked. It must include both `use_oidc = true` and `use_azuread_auth = true`. In GitHub Actions, either create the backend config from protected repository/environment variables or store those non-secret values as variables; never commit state or secrets.
 
-## Alternative: Service principal with client secret
+Do not run `terraform apply` automatically from an untrusted pull request. Use a protected GitHub Environment with required reviewers, branch restrictions and an approval gate for production apply. Always review a plan first.
 
-OIDC is preferred. Only use a client secret if federation is not available.
+## Alternative: service principal client secret
 
-1. In Microsoft Entra ID, create or select the app registration and its service principal.
-2. Under **Certificates & secrets → Client secrets → New client secret**, create one and copy the **Value** immediately. Do not use the Secret ID.
-3. Assign Azure RBAC to the service principal at a dedicated test resource-group scope, preferably starting with Contributor for a lab; reduce privileges for production.
-4. In GitHub **Settings → Secrets and variables → Actions → Secrets**, create:
-   - `ARM_CLIENT_ID` = application/client ID
-   - `ARM_TENANT_ID` = tenant ID
-   - `ARM_SUBSCRIPTION_ID` = subscription ID
-   - `ARM_CLIENT_SECRET` = secret **Value**
-5. For Terraform, pass these as job environment variables. Do not echo them, place them in tfvars, or commit them. Rotate and expire the secret according to your policy.
+Use this only if OIDC federation is not available. Client secrets are long-lived credentials and must be rotated.
 
-To use a service-principal secret, remove `ARM_USE_OIDC: "true"` and set `ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}` for the job. Do not configure OIDC and client-secret settings simultaneously in a confusing mixture.
+1. In Microsoft Entra ID, create/select the app registration and its service principal.
+2. Open **Certificates & secrets → Client secrets → New client secret**.
+3. Copy the secret **Value** immediately (not the Secret ID).
+4. Assign the service principal **Contributor** on the pre-created deployment resource group, and the required **Storage Blob Data Contributor** on the state container if using remote state.
+5. In GitHub → **Settings → Secrets and variables → Actions → Secrets**, add:
+   - `ARM_CLIENT_ID`
+   - `ARM_TENANT_ID`
+   - `ARM_SUBSCRIPTION_ID`
+   - `ARM_CLIENT_SECRET` (the secret Value)
+6. In the deployment job environment, map them to `ARM_CLIENT_ID`, `ARM_TENANT_ID`, `ARM_SUBSCRIPTION_ID`, and `ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}`. Remove `ARM_USE_OIDC: "true"`; do not mix a client secret and OIDC mode.
+7. Never echo, commit, or place the secret in `terraform.tfvars`. Rotate it and revoke it if it may have been exposed.
 
 ## Troubleshooting
 
-- **AADSTS70021 / federated credential not found**: issuer, subject (owner/repo, branch or environment), or audience mismatch.
-- **Not authorized / AuthorizationFailed**: RBAC role is missing or assigned at the wrong scope; allow time for RBAC propagation.
-- **Backend access denied**: storage blob data permissions are missing or backend auth settings do not match OIDC.
-- **Terraform validate says variable not set**: ensure example variable files have safe defaults or explicitly provide validation-time values; do not solve this by committing secrets.
-- **OIDC not available**: confirm the job has `id-token: write`, the run is on an allowed branch/environment, and the federated credential exactly matches its subject.
+- **AADSTS70021 / federated credential not found**: exact issuer, subject, and audience mismatch; check owner/repository spelling, branch or environment subject.
+- **AuthorizationFailed**: role assignment is missing or too narrow; confirm the app's service principal, target resource group scope, and allow for RBAC propagation.
+- **Remote state access denied**: verify the backend has `use_oidc = true` plus `use_azuread_auth = true`, and the identity has Storage Blob Data Contributor.
+- **Provider registration errors**: have a subscription admin register the required resource providers; this pipeline's provider block deliberately disables automatic registration.
+- **Terraform validate passes but plan fails**: validation does not call Azure APIs. Set required SSH/TLS/SQL values, verify network SKU availability/quotas, review routes and return paths, and run a plan against a non-production subscription.
 
-No authentication method can guarantee every deployment succeeds; verify using a plan in a non-production subscription before applying changes.
+OIDC avoids static credentials, but it does not remove the need for careful RBAC, protected branches, state security, or plan review.
