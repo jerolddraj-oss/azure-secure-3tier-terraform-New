@@ -14,9 +14,6 @@ on:
       - ".github/workflows/terraform-validate.yml"
   workflow_dispatch:
 
-permissions:
-  contents: read
-
 concurrency:
   group: terraform-validate-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -25,6 +22,8 @@ jobs:
   validate:
     name: Format and validate
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -47,3 +46,43 @@ jobs:
       - name: Validate production configuration
         working-directory: environments/prod
         run: terraform validate -no-color
+
+  azure-oidc-test:
+    name: Test Azure OIDC authentication
+    runs-on: ubuntu-latest
+    # Do not request Azure credentials for untrusted pull-request code.
+    # This job runs on pushes to main and manual workflow_dispatch runs.
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Sign in to Azure using OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.ARM_CLIENT_ID }}
+          tenant-id: ${{ vars.ARM_TENANT_ID }}
+          subscription-id: ${{ vars.ARM_SUBSCRIPTION_ID }}
+
+      - name: Verify Azure subscription
+        run: |
+          az account show \
+            --query "{subscription:name, subscriptionId:id, tenantId:tenantId}" \
+            --output table
+
+      - name: Verify target resource group access
+        env:
+          TARGET_RESOURCE_GROUP: ${{ vars.TARGET_RESOURCE_GROUP }}
+        run: |
+          if [ -z "$TARGET_RESOURCE_GROUP" ]; then
+            echo "Missing GitHub Actions variable: TARGET_RESOURCE_GROUP"
+            exit 1
+          fi
+
+          az group show \
+            --name "$TARGET_RESOURCE_GROUP" \
+            --query "{name:name, location:location, provisioningState:properties.provisioningState}" \
+            --output table
