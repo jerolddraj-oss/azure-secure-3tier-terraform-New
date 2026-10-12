@@ -33,7 +33,7 @@ resource "azurerm_application_gateway" "this" {
   location            = var.location
   resource_group_name = var.resource_group_name
   zones               = ["1", "2", "3"]
-  enable_http2        = true
+  http2_enabled      = true
   firewall_policy_id  = azurerm_web_application_firewall_policy.this.id
 
   sku {
