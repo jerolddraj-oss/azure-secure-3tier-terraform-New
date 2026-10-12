@@ -9,7 +9,6 @@ variable "admin_username" { type = string }
 variable "ssh_public_key" {
   type      = string
   sensitive = true
-  default   = ""
 }
 variable "vm_size" {
   type    = string
