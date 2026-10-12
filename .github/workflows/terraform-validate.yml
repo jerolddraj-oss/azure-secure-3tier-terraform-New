@@ -1,4 +1,3 @@
-```yaml
 name: Terraform Validate and Azure OIDC
 
 on:
@@ -7,15 +6,12 @@ on:
       - "environments/**/*.tf"
       - "modules/**/*.tf"
       - ".github/workflows/terraform-validate.yml"
-
   push:
-    branches:
-      - main
+    branches: [main]
     paths:
       - "environments/**/*.tf"
       - "modules/**/*.tf"
       - ".github/workflows/terraform-validate.yml"
-
   workflow_dispatch:
 
 concurrency:
@@ -23,18 +19,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-
-  # =========================================================
-  # JOB 1: TERRAFORM VALIDATION
-  # No Azure authentication required for this job.
-  # =========================================================
   validate:
     name: Terraform Format and Validate
     runs-on: ubuntu-latest
-
     permissions:
       contents: read
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -48,7 +37,7 @@ jobs:
       - name: Format Terraform files
         run: terraform fmt -recursive
 
-      - name: Initialize Terraform without Azure backend
+      - name: Initialize without Azure backend
         working-directory: environments/prod
         run: terraform init -backend=false -input=false
 
@@ -56,64 +45,38 @@ jobs:
         working-directory: environments/prod
         run: terraform validate -no-color
 
-
-  # =========================================================
-  # JOB 2: AZURE OIDC AUTHENTICATION
-  # AZURE AUTHENTICATION INFORMATION IS CONFIGURED BELOW.
-  # =========================================================
   azure-oidc:
     name: Authenticate to Azure using OIDC
     runs-on: ubuntu-latest
-
-    # Do not authenticate to Azure for pull requests.
+    # OIDC is only requested on main pushes/manual runs, not PRs.
     if: github.event_name != 'pull_request'
-
-    # ========== AZURE OIDC CONFIGURATION: REQUIRED ==========
     permissions:
       contents: read
       id-token: write
-    # =======================================================
-
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v@7
+        uses: actions/checkout@v7
 
-      # =======================================================
-      # AZURE AUTHENTICATION INFORMATION
-      #
-      # Configure these GitHub repository variables:
-      # ARM_CLIENT_ID
-      # ARM_TENANT_ID
-      # ARM_SUBSCRIPTION_ID
-      #
-      # Do NOT enter your IDs directly into this YAML.
-      # =======================================================
       - name: Azure Login using OIDC
         uses: azure/login@v2
         with:
           client-id: ${{ vars.ARM_CLIENT_ID }}
           tenant-id: ${{ vars.ARM_TENANT_ID }}
           subscription-id: ${{ vars.ARM_SUBSCRIPTION_ID }}
+          audience: api://AzureADTokenExchange
 
-      - name: Display authenticated Azure subscription
+      - name: Verify authenticated Azure subscription
         run: |
           az account show \
             --query "{subscription:name, subscriptionId:id, tenantId:tenantId}" \
             --output table
 
-      # =======================================================
-      # TARGET RESOURCE GROUP
-      #
-      # Configure this GitHub repository variable:
-      # TARGET_RESOURCE_GROUP
-      # Example: secure3tier-rg
-      # =======================================================
-      - name: Verify Azure resource group access
+      - name: Verify target resource group access
         env:
           TARGET_RESOURCE_GROUP: ${{ vars.TARGET_RESOURCE_GROUP }}
         run: |
           if [ -z "$TARGET_RESOURCE_GROUP" ]; then
-            echo "ERROR: TARGET_RESOURCE_GROUP variable is missing."
+            echo "Missing GitHub Actions variable TARGET_RESOURCE_GROUP"
             exit 1
           fi
 
@@ -121,4 +84,3 @@ jobs:
             --name "$TARGET_RESOURCE_GROUP" \
             --query "{name:name, location:location, provisioningState:properties.provisioningState}" \
             --output table
-```
