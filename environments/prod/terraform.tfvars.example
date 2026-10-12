@@ -1,0 +1,9 @@
+subscription_id = "00000000-0000-0000-0000-000000000000"
+location        = "East US"
+name_prefix     = "secure3tier"
+
+# Sensitive values must be set locally/through a secret manager before a real plan:
+# TF_VAR_ssh_public_key
+# TF_VAR_tls_certificate_pfx_base64
+# TF_VAR_tls_certificate_password
+# TF_VAR_sql_admin_password
