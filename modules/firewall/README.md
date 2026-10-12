@@ -1,3 +1,3 @@
 # Azure Firewall module
 
-The environment root references this module for Firewall resources and a private-IP output. Inspect the root module wiring and implement/verify policy rules, routing, diagnostics, and approved egress before deploying. This folder currently documents the interface only.
+Creates a Standard Azure Firewall, Firewall Policy and example Web-to-App TCP/8080 and App-to-SQL TCP/1433 network rules. Review routing, return paths, DNS dependencies, diagnostics and approved egress destinations before production deployment.
