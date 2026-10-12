@@ -6,12 +6,10 @@ variable "web_backend_ip" { type = string }
 variable "tls_certificate_pfx_base64" {
   type      = string
   sensitive = true
-  default   = ""
 }
 variable "tls_certificate_password" {
   type      = string
   sensitive = true
-  default   = ""
 }
 variable "tags" {
   type    = map(string)
